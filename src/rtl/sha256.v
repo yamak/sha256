@@ -148,7 +148,9 @@ module sha256(
                    .ready(core_ready),
 
                    .digest(core_digest),
-                   .digest_valid(core_digest_valid)
+                   .digest_valid(core_digest_valid),
+                   .load_digest(1'b0),
+                   .ext_digest(256'h0)
                   );
 
 

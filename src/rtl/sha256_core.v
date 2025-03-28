@@ -1,14 +1,21 @@
 //======================================================================
 //
-// sha256_core.v
+// sha256_core.v (Modified for external digest load)
 // -------------
-// Verilog 2001 implementation of the SHA-256 hash function.
-// This is the internal core with wide interfaces.
+// Verilog 2001 implementation of the SHA-256 (and SHA-224) hash function.
+// This version adds the ability to load an external digest (H0..H7) from
+// outside, to facilitate context switching.
 //
-//
-// Author: Joachim Strombergson
+// Original author: Joachim Strombergson
+// Modifications for "load_digest" by Yusuf Yamak
 // Copyright (c) 2013, Secworks Sweden AB
 // All rights reserved.
+//
+// Modifications for load_digest and ext_digest by Yusuf Yamak.
+// - Added a new input signal "load_digest" to trigger loading an external digest.
+// - Added a new 256-bit input "ext_digest" that carries H0..H7 from outside.
+// - Added a new FSM state "CTRL_LOAD" to load H0..H7 registers from "ext_digest".
+// - Converted all comments to English.
 //
 // Redistribution and use in source and binary forms, with or
 // without modification, are permitted provided that the following
@@ -52,6 +59,12 @@ module sha256_core(
                    output wire           ready,
                    output wire [255 : 0] digest,
                    output wire           digest_valid
+
+                   // -------------------------------------------------
+                   // Added/Modified signals for external digest load:
+                   // -------------------------------------------------
+                   ,input wire           load_digest   // Added: triggers load of external digest
+                   ,input wire [255 : 0] ext_digest    // Added: external H0..H7 value
                   );
 
 
@@ -81,6 +94,11 @@ module sha256_core(
   localparam CTRL_IDLE   = 0;
   localparam CTRL_ROUNDS = 1;
   localparam CTRL_DONE   = 2;
+
+  // -------------------------------------------------------------
+  // Added new localparam for external-digest-loading state:
+  // -------------------------------------------------------------
+  localparam CTRL_LOAD   = 3; // Added: handle load_digest
 
 
   //----------------------------------------------------------------
@@ -160,6 +178,11 @@ module sha256_core(
   reg [5 : 0]   w_round;
   wire [31 : 0] w_data;
 
+  // -------------------------------------------------------------
+  // Added register to enable external load into H0..H7:
+  // -------------------------------------------------------------
+  reg digest_we_ext; // Added: used to indicate we load from ext_digest
+
 
   //----------------------------------------------------------------
   // Module instantiantions.
@@ -226,7 +249,6 @@ module sha256_core(
         end
       else
         begin
-
           if (a_h_we)
             begin
               a_reg <= a_new;
@@ -279,6 +301,22 @@ module sha256_core(
       H6_new = 32'h0;
       H7_new = 32'h0;
       H_we = 0;
+
+      // ----------------------------------------------
+      // Added: if we are loading from external digest:
+      // ----------------------------------------------
+      if (digest_we_ext)
+        begin
+          H_we   = 1;
+          H0_new = ext_digest[255:224];
+          H1_new = ext_digest[223:192];
+          H2_new = ext_digest[191:160];
+          H3_new = ext_digest[159:128];
+          H4_new = ext_digest[127: 96];
+          H5_new = ext_digest[ 95: 64];
+          H6_new = ext_digest[ 63: 32];
+          H7_new = ext_digest[ 31:  0];
+        end
 
       if (digest_init)
         begin
@@ -489,6 +527,10 @@ module sha256_core(
       sha256_ctrl_new  = CTRL_IDLE;
       sha256_ctrl_we   = 0;
 
+      // -----------------------------------------------
+      // Added: default off for external digest load:
+      // -----------------------------------------------
+      digest_we_ext    = 0; // newly introduced
 
       case (sha256_ctrl_reg)
         CTRL_IDLE:
@@ -518,8 +560,16 @@ module sha256_core(
                 sha256_ctrl_new  = CTRL_ROUNDS;
                 sha256_ctrl_we   = 1;
               end
-          end
 
+            // ----------------------------------------------
+            // Added: check load_digest to load external H's
+            // ----------------------------------------------
+            if (load_digest)
+              begin
+                sha256_ctrl_new = CTRL_LOAD;
+                sha256_ctrl_we  = 1;
+              end
+          end
 
         CTRL_ROUNDS:
           begin
@@ -534,7 +584,6 @@ module sha256_core(
               end
           end
 
-
         CTRL_DONE:
           begin
             digest_update    = 1;
@@ -543,6 +592,21 @@ module sha256_core(
 
             sha256_ctrl_new  = CTRL_IDLE;
             sha256_ctrl_we   = 1;
+          end
+
+        // -----------------------------
+        // Added: external digest load
+        // -----------------------------
+        CTRL_LOAD:
+          begin
+            digest_we_ext    = 1;  // load ext_digest into H0..H7
+            sha256_ctrl_new  = CTRL_IDLE;
+            sha256_ctrl_we   = 1;
+          end
+
+        default:
+          begin
+            // Should never get here.
           end
       endcase // case (sha256_ctrl_reg)
     end // sha256_ctrl_fsm
